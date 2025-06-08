@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package log.v1;
+
+option go_package = "github.com/jjhwan-h/dt/api/v1;v1";
+
+message Record {
+    bytes value = 1;
+    uint64 offset = 2;
+}
+
+service Log{
+    rpc Produce(ProduceRequest) returns (ProduceResponse) {}
+    rpc Consume(ConsumeRequest) returns (ConsumeResponse) {}
+    rpc ConsumeStream(ConsumeRequest) returns (stream ConsumeResponse) {} // 서버측 스트리밍
+    rpc ProduceStream(stream ProduceRequest) returns (stream ProduceResponse) {} // 양방향 스트리밍
+}
+
+// 로그에 생성할 레코드
+message ProduceRequest {
+    Record record = 1;
+}
+
+// 레코드의 오프셋(레코드 ID)
+message ProduceResponse {
+    uint64 offset = 1;
+}
+
+message ConsumeRequest {
+    uint64 offset = 1;
+}
+
+message ConsumeResponse {
+    Record record = 1;
+}
