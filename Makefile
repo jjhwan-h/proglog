@@ -13,6 +13,14 @@ gencert:
 		-ca=ca.pem \
 		-ca-key=ca-key.pem \
 		-config=internal/config/test/ca-config.json \
+		-profile=server \
+		-cn="127.0.0.1" \
+		internal/config/test/server-csr.json | cfssljson -bare server
+		
+	cfssl gencert \
+		-ca=ca.pem \
+		-ca-key=ca-key.pem \
+		-config=internal/config/test/ca-config.json \
 		-profile=client \
 		-cn="root" \
 		internal/config/test/client-csr.json | cfssljson -bare root-client
@@ -27,8 +35,12 @@ gencert:
 	
 	mv *.pem *.csr ${CONFIG_PATH}
 
+$(CONFIG_PATH)/model.conf:
+	cp internal/config/test/model.conf $(CONFIG_PATH)/model.conf
+$(CONFIG_PATH)/policy.csv:
+	cp internal/config/test/policy.csv $(CONFIG_PATH)/policy.csv
 .PHONY: test
-test:
+test: $(CONFIG_PATH)/policy.csv $(CONFIG_PATH)/model.conf
 	go test -race -v ./...
 
 .PHONY: compile

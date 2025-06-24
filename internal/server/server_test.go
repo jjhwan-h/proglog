@@ -7,10 +7,12 @@ import (
 	"testing"
 
 	api "github.com/jjhwan-h/proglog/api/v1"
+	"github.com/jjhwan-h/proglog/internal/auth"
 	"github.com/jjhwan-h/proglog/internal/config"
 	"github.com/jjhwan-h/proglog/internal/log"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 )
@@ -25,6 +27,7 @@ func TestServer(t *testing.T) {
 		"produce/consume a message to/from the log succeeds": testProduceConsume,
 		"produce/consume stream succeeds":                    testProduceConsumeStream,
 		"consume past log boundary fails":                    testConsumePastBoundary,
+		"unauthorized fails":                                 testUnauthorized,
 	} {
 		t.Run(scenario, func(t *testing.T) {
 			rootClient, nobodyClient, config, teardown := setupTest(t, nil)
@@ -33,69 +36,6 @@ func TestServer(t *testing.T) {
 		})
 	}
 }
-
-// func setupTest(t *testing.T, fn func(*Config)) (
-// 	client api.LogClient,
-// 	cfg *Config,
-// 	teardown func(),
-// ) {
-// 	t.Helper()
-
-// 	l, err := net.Listen("tcp", "127.0.0.1:0")
-// 	require.NoError(t, err)
-
-// 	clientTLSConfig, err := config.SetupTLSConfig(config.TLSConfig{
-// 		CertFile: config.ClientCertFile,
-// 		KeyFile:  config.ClientKeyFile,
-// 		CAFile:   config.CAFile,
-// 	})
-// 	require.NoError(t, err)
-
-// 	clientCreds := credentials.NewTLS(clientTLSConfig)
-// 	cc, err := grpc.NewClient(
-// 		l.Addr().String(),
-// 		grpc.WithTransportCredentials(clientCreds),
-// 	)
-// 	require.NoError(t, err)
-
-// 	client = api.NewLogClient(cc)
-
-// 	serverTLSConfig, err := config.SetupTLSConfig(config.TLSConfig{
-// 		CertFile:      config.ServerCertFile,
-// 		KeyFile:       config.ServerKeyFile,
-// 		CAFile:        config.CAFile,
-// 		ServerAddress: l.Addr().String(),
-// 		Server:        true,
-// 	})
-// 	require.NoError(t, err)
-// 	serverCreds := credentials.NewTLS(serverTLSConfig)
-
-// 	dir, err := os.MkdirTemp("", "server-test")
-// 	require.NoError(t, err)
-
-// 	clog, err := log.NewLog(dir, log.Config{})
-// 	require.NoError(t, err)
-
-// 	cfg = &Config{
-// 		CommitLog: clog,
-// 	}
-// 	if fn != nil {
-// 		fn(cfg)
-// 	}
-// 	server, err := NewGRPCServer(cfg, grpc.Creds(serverCreds))
-// 	require.NoError(t, err)
-
-// 	go func() {
-// 		server.Serve(l)
-// 	}()
-
-// 	return client, cfg, func() {
-// 		server.Stop()
-// 		cc.Close()
-// 		l.Close()
-// 		clog.Remove()
-// 	}
-// }
 
 func setupTest(t *testing.T, fn func(*Config)) (
 	rootClient api.LogClient,
@@ -129,13 +69,15 @@ func setupTest(t *testing.T, fn func(*Config)) (
 	}
 
 	// superuser: 생산과 소비 가능
-	rootConn, rootClient, _ := newClient(
+	var rootConn *grpc.ClientConn
+	rootConn, rootClient, _ = newClient(
 		config.RootClientCertFile,
 		config.RootClientKeyFile,
 	)
 
 	// 아무런 권한 없음
-	nobodyConn, nobodyClient, _ := newClient(
+	var nobodyConn *grpc.ClientConn
+	nobodyConn, nobodyClient, _ = newClient(
 		config.NobodyClientCertFile,
 		config.NobodyClientKeyFile,
 	)
@@ -156,8 +98,10 @@ func setupTest(t *testing.T, fn func(*Config)) (
 	clog, err := log.NewLog(dir, log.Config{})
 	require.NoError(t, err)
 
+	authorizer := auth.New(config.ACLModelFile, config.ACLPolicyFile)
 	cfg = &Config{
-		CommitLog: clog,
+		CommitLog:  clog,
+		Authorizer: authorizer,
 	}
 	if fn != nil {
 		fn(cfg)
@@ -286,5 +230,39 @@ func testProduceConsumeStream(
 				Offset: uint64(i),
 			})
 		}
+	}
+}
+
+func testUnauthorized(
+	t *testing.T,
+	_,
+	client api.LogClient,
+	coinfig *Config,
+) {
+	ctx := context.Background()
+
+	produce, err := client.Produce(ctx,
+		&api.ProduceRequest{
+			Record: &api.Record{
+				Value: []byte("hello world"),
+			},
+		})
+	if produce != nil {
+		t.Fatalf("produce response should be nil")
+	}
+	gotCode, wantCode := status.Code(err), codes.PermissionDenied
+	if gotCode != wantCode {
+		t.Fatalf("got code: %d, want: %d", gotCode, wantCode)
+	}
+
+	consume, err := client.Consume(ctx, &api.ConsumeRequest{
+		Offset: 0,
+	})
+	if consume != nil {
+		t.Fatalf("consume response should be nil")
+	}
+	gotCode, wantCode = status.Code(err), codes.PermissionDenied
+	if gotCode != wantCode {
+		t.Fatalf("got code: %d,want: %d", gotCode, wantCode)
 	}
 }
